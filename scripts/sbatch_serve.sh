@@ -12,6 +12,19 @@
 # alone) — holding a GPU indefinitely for a portfolio demo is inconsiderate.
 # Raise this (or scancel + resubmit) if a longer live session is actually needed.
 #SBATCH --output=%x-%j.log
+#SBATCH --export=NONE
+# --export=NONE: don't inherit the submitting shell's environment at all.
+# Real incident (2026-09-05): submitted from a terminal where an unrelated
+# project's virtualenv (FlowForge/.venv) had been auto-activated on top of
+# conda base — sbatch's default --export=ALL carried that PATH/VIRTUAL_ENV
+# pollution straight into the job, so this script's own `conda activate
+# servellm` below never actually took effect: `python3` still resolved to a
+# different conda env (`env`) with `uvicorn` imported from FlowForge's
+# venv, and the job died on `ModuleNotFoundError: No module named 'vllm'`
+# — not because vllm was missing, but because the wrong Python ran. Fixed
+# by refusing to inherit anything and rebuilding the environment from
+# scratch below (belt-and-suspenders: also explicitly deactivates/unsets
+# any conda env or venv state that could still leak in some other way).
 # Pinned to dgx-v100-01, not dgx-a100-02 or the P100 nodes:
 #  - dgx-a100-02 (Ampere, ideal on paper) had CPU load ~18 from ~60 other
 #    users' sessions; even `import torch` hung for 10+ min despite the GPUs
@@ -26,6 +39,13 @@
 # FlashAttention-2 on pre-Ampere) — logged as INFO, not an error.
 
 set -euo pipefail
+
+# Defensive, on top of --export=NONE above: strip any venv/conda state that
+# could still be present (e.g. SLURM/PAM re-sourcing a login profile that
+# auto-activates something) before setting up the one environment this job
+# actually wants.
+unset VIRTUAL_ENV PYTHONPATH PYTHONHOME || true
+for _ in 1 2 3; do conda deactivate 2>/dev/null || break; done
 
 export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
@@ -44,6 +64,19 @@ PROJECT_ROOT="$(pwd)"
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
 conda activate servellm
 
+# Belt-and-suspenders on top of `conda activate` above: resolve and print
+# the interpreter that will actually run, and hard-fail loudly here rather
+# than dying inside a Python traceback three files deep if activation
+# silently didn't take effect the way the 2026-09-05 incident (see
+# --export=NONE comment above) did.
+PYTHON_BIN="$(command -v python3)"
+echo "Python: $PYTHON_BIN"
+"$PYTHON_BIN" -c "import vllm" || {
+    echo "FATAL: '$PYTHON_BIN' cannot import vllm — conda activate servellm" \
+         "did not take effect (check for inherited venv/conda state)." >&2
+    exit 1
+}
+
 export SERVELLM_HOST=0.0.0.0
 export SERVELLM_PORT=8000
 [ -f "$PROJECT_ROOT/.env" ] && set -a && source "$PROJECT_ROOT/.env" && set +a
@@ -52,5 +85,16 @@ echo "Node: $(hostname)"
 echo "PWD: $(pwd)"
 nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv
 
-srun --ntasks=1 python3 -m uvicorn backend.gateway.main:app \
+# --export=ALL here (distinct from #SBATCH --export=NONE above): NONE
+# governs what's inherited from the *submitting* shell (deliberately
+# nothing, per the 2026-09-05 incident); ALL here means srun instead
+# inherits *this script's own* current environment — the clean one just
+# rebuilt above (PYTHONNOUSERSITE, conda activate servellm, HF_HUB_OFFLINE)
+# — not the submission-time one. Without this, PYTHONNOUSERSITE silently
+# didn't reach the srun task even though it was exported earlier in this
+# same script, and triton loaded from ~/.local instead of the servellm
+# env's own copy, since this cluster's srun appears to default to the
+# same NONE policy as its parent sbatch job rather than the shell it's
+# actually invoked from.
+srun --ntasks=1 --export=ALL "$PYTHON_BIN" -m uvicorn backend.gateway.main:app \
     --host "$SERVELLM_HOST" --port "$SERVELLM_PORT"
