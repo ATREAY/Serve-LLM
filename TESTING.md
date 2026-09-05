@@ -49,6 +49,12 @@ curl http://dgx-v100-01:18742/v1/models
 
 ## 2. Basic inference (Phases 1-3: streaming, multi-model routing, static LoRA)
 
+Phase 3's static LoRA demo (`general:colorist`) no longer exists — it was
+trained against TinyLlama-1.1B specifically and isn't compatible with
+`general`'s current base model (see the 2026-09-05 quality-upgrade entry in
+`docs/ROADMAP.md`). The dynamic-adapter path (section 3 below) still works
+unchanged with any adapter trained for the current base model.
+
 ```bash
 # non-streaming, the general model
 curl -X POST http://dgx-v100-01:18742/v1/chat/completions \
@@ -59,11 +65,6 @@ curl -X POST http://dgx-v100-01:18742/v1/chat/completions \
 curl -X POST http://dgx-v100-01:18742/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"code","messages":[{"role":"user","content":"Write a python fibonacci function."}],"max_tokens":80}'
-
-# the static LoRA adapter — response should notably shift toward colors
-curl -X POST http://dgx-v100-01:18742/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"general:colorist","messages":[{"role":"user","content":"What color is the sky at sunset?"}],"max_tokens":40}'
 
 # streaming (watch tokens arrive one at a time; -N disables curl's own buffering)
 curl -N -X POST http://dgx-v100-01:18742/v1/chat/completions \

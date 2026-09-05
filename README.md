@@ -5,7 +5,7 @@ LoRA adapter loading, priority-based intelligent routing, measured continuous ba
 GPU telemetry, and full Prometheus/Grafana observability, deployed and load-tested on
 real GPU hardware.
 
-Runs entirely on open-weight models (TinyLlama, Qwen2.5-Coder, Qwen3). **No OpenAI,
+Runs entirely on open-weight models (Qwen2.5-7B-Instruct, Qwen2.5-Coder). **No OpenAI,
 Anthropic, Gemini, or other paid API is called anywhere in this stack** —
 "OpenAI-compatible" here means only that the HTTP request/response shape matches, so
 standard clients (`openai-python`, LangChain, curl) work unmodified against a
@@ -100,7 +100,7 @@ cp .env.example .env
 # pre-download weights (compute nodes here have no internet egress)
 python3 -c "
 from huggingface_hub import snapshot_download as s
-s('TinyLlama/TinyLlama-1.1B-Chat-v1.0')
+s('Qwen/Qwen2.5-7B-Instruct')
 s('Qwen/Qwen2.5-Coder-1.5B-Instruct')
 "
 

@@ -508,3 +508,57 @@ only errors seen afterward (a port-bind conflict, then a CUDA OOM on a scheduler
 auto-requeue) were both artifacts of test-submitting a second instance while the original,
 already-healthy job was still holding the same GPU node — not defects in the fix — and
 resolved by cancelling the redundant test jobs, confirmed via `sacct`.
+
+## Quality upgrade: TinyLlama-1.1B -> Qwen2.5-7B-Instruct for "general" (2026-09-05)
+
+Prompted by reviewing real `ResearchAgent` output honestly rather than assuming "it runs
+without errors" meant "it's good": query drift, unreliable self-scoring, and incoherent
+synthesis all trace back to `general`'s 1.1B-parameter instruction-following ceiling, not
+to any bug in the agent logic calling it. This is that fix, on the serving side.
+
+**Not Qwen3-8B**, despite that being the model this file and `README.md` previously named
+as the intended upgrade path — checked, not assumed: the pinned `vllm==0.6.3.post1` (see
+`backend/requirements.txt`) predates Qwen3's release, and its model registry
+(`ModelRegistry.get_supported_archs()`, queried directly) only recognizes
+`Qwen2ForCausalLM`, not Qwen3's architecture class. `Qwen2.5-7B-Instruct` declares that
+same, already-supported architecture (checked via its own `config.json`) and is real,
+free, Apache-2.0, ungated on Hugging Face — the same "verify the specific installed
+version's actual capability, don't trust a model name" discipline behind every other
+version-pinning decision in this project.
+
+**Two real failures hit getting the memory split right, both fixed by reading vLLM's
+actual profiling code rather than guessing a second time:**
+
+1. First attempt: `general: 0.60`, `code: 0.15` (`gpu_memory_utilization`). `general`
+   loaded fine; `code` crashed with `ValueError: No available memory for the cache
+   blocks.` Root cause, found by reading `vllm/worker/worker.py`'s
+   `determine_num_available_blocks()`: each engine's usable KV-cache budget is
+   `total_gpu_memory * gpu_memory_utilization - peak_memory`, where `peak_memory` is
+   that engine's *own* memory delta during its profiling forward pass — which probes
+   activation memory for up to `max_num_seqs` (default 256) concurrent sequences, a far
+   bigger number than the model's resting weight size. `code`'s 0.15 ceiling (4.8GB) was
+   smaller than its own profiling peak, before any cache was even allocated.
+2. Fixed by tuning both values together, not just raising one in isolation: `general:
+   0.55` (17.6GB — comfortably above its 14.25GB actual weight size), `code: 0.30`
+   (9.6GB — comfortably above its profiling peak). Combined 0.85, leaving real headroom
+   for CUDA context overhead.
+
+**Phase 3's static LoRA demo (`general:colorist`) was removed, not carried forward.**
+That adapter was trained specifically against TinyLlama-1.1B's shape (verified via its
+own `adapter_config.json` at the time) and isn't compatible with a different base model —
+LoRA adapters are tied to the exact base model they were trained on. Removed rather than
+left silently broken; `ResearchAgent` (the actual consumer of `general`) never used it,
+only Phase 3's own demo curl command did — see `TESTING.md`.
+
+### Verified (2026-09-05)
+
+Redeployed with the tuned split: `general` got 698 KV-cache blocks (5.45x concurrency at
+2048 tokens), `code` got 10428 (81.47x) — both `all models ready`. A direct chat
+completion produced a coherent, correctly-terminated (`finish_reason: "stop"`, not a
+length-cutoff ramble) answer on the first try. Ran `ResearchAgent`'s full pipeline against
+the same question used to characterize TinyLlama's query-drift bug earlier
+(`docs/ROADMAP.md` in that repo): all 4 search queries stayed on-topic this time (none of
+the earlier drift to generic terms), the critique scored 0.80 with `score_source:
+"parsed"` on the *first* iteration (no retry needed), and the final synthesis correctly
+cited and reasoned across multiple real papers — a direct, measured before/after on the
+same downstream consumer, not just an isolated model swap assumed to help.

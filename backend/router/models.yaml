@@ -1,32 +1,53 @@
 # Phase 2 model registry. Each entry gets its own vLLM AsyncLLMEngine on the
 # same GPU — gpu_memory_utilization values are kept low and sum to well
 # under 1.0 so both fit on a single V100 (32GB) alongside CUDA graph capture
-# overhead for each. Raise them (and pick bigger models — see the originally
-# planned Qwen3-8B/Gemma-3-4B lineup in README.md) once running on an A100
-# with more room, or once only one model needs to be resident at a time.
+# overhead for each.
 #
 # dtype is float16, not auto/bfloat16: this cluster's working node
 # (dgx-v100-01) is compute capability 7.0, which vLLM's AsyncLLMEngine
 # hard-rejects for bfloat16 — see docs/ROADMAP.md.
+#
+# Quality upgrade (2026-09-05): "general" moved from TinyLlama-1.1B to
+# Qwen2.5-7B-Instruct — this is the single highest-leverage fix for
+# ResearchAgent's answer quality (query drift, unreliable self-scoring,
+# incoherent synthesis all trace back to a 1.1B model's instruction-following
+# ceiling, not to any agent-side logic). NOT Qwen3-8B, despite that being
+# the model this file itself and README.md previously named as "the"
+# upgrade path: the pinned vllm==0.6.3.post1 (see backend/requirements.txt)
+# predates Qwen3's release and its model registry only recognizes
+# `Qwen2ForCausalLM` — confirmed directly via
+# `ModelRegistry.get_supported_archs()` before touching this file, not
+# assumed from the model's name. Qwen2.5-7B-Instruct declares that same
+# architecture class (checked via its config.json) and is real, free,
+# Apache-2.0, ungated — same "verify the specific installed version's
+# actual capability, don't trust a name" discipline as every other
+# version-pinning decision in this project.
 models:
   - served_model_id: general
-    hf_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    hf_model: Qwen/Qwen2.5-7B-Instruct
     capability: general
     dtype: float16
     max_model_len: 2048
-    gpu_memory_utilization: 0.35
-    # Phase 3: static LoRA adapter, addressed as "general:colorist" in
-    # request.model. Trained for exactly this base model (verified via its
-    # adapter_config.json base_model_name_or_path) — vLLM's canonical LoRA
-    # demo adapter, not something we trained ourselves.
-    adapters:
-      - name: colorist
-        hf_repo: BOT365/tinyllama-colorist-lora
+    # Raised from 0.35: a 7B model's weights alone are ~14GB in fp16 vs.
+    # TinyLlama's ~2.2GB. 0.55 * 32GB = 17.6GB, leaving ~3.3GB for KV
+    # cache/activations. See the "code" entry's comment below for why this
+    # was tuned down from an initial 0.60 attempt after a real crash — this
+    # value isn't independently chosen, the two entries were tuned together.
+    gpu_memory_utilization: 0.55
+    # Phase 3's static LoRA demo (general:colorist) is removed here, not
+    # carried forward: that adapter was trained specifically against
+    # TinyLlama-1.1B's architecture/shape (verified via its own
+    # adapter_config.json at the time) and is not compatible with
+    # Qwen2.5-7B — LoRA adapters are tied to the exact base model they were
+    # trained on, not swappable across a base-model change. Removed rather
+    # than left in place silently broken; ResearchAgent (the actual
+    # consumer of "general") never used it, only Phase 3's own demo did.
     # Phase 4: reserve vLLM LoRA slots for adapters registered at runtime via
     # POST /v1/admin/adapters (e.g. general:tarot in docs/ROADMAP.md) — these
     # aren't declared here, this just budgets room for them. Fixed at engine
     # startup; raise it (and restart) if more than 3 dynamic adapters are
-    # ever resident on "general" at once.
+    # ever resident on "general" at once. Any adapter registered now needs
+    # to be trained against Qwen2.5-7B specifically, per the note above.
     max_dynamic_adapters: 3
     # Phase 6: priority-ordered scheduling for the waiting queue (and
     # preemption of running low-priority requests). "fcfs" (the vLLM
@@ -60,4 +81,21 @@ models:
     capability: code
     dtype: float16
     max_model_len: 2048
-    gpu_memory_utilization: 0.35
+    # First attempt at this upgrade set this to 0.15 (reasoning: 1.5B
+    # weights are only ~3GB, so 0.15 * 32GB = 4.8GB looked generous) and it
+    # crashed: "ValueError: No available memory for the cache blocks."
+    # Root cause, confirmed by reading vLLM's actual profiling code
+    # (vllm/worker/worker.py's determine_num_available_blocks), not
+    # guessed: each engine's usable KV-cache budget is
+    # `total_gpu_memory * gpu_memory_utilization - peak_memory`, where
+    # `peak_memory` is THIS engine's own memory delta during its profiling
+    # forward pass — which simulates up to `max_num_seqs` (default 256)
+    # concurrent sequences at `max_model_len` tokens each, a much bigger
+    # activation-memory probe than the model's resting weight size alone.
+    # 0.15's ceiling (4.8GB) was smaller than that probe's own peak, before
+    # any KV cache was even allocated -> zero blocks, hard failure. Raised
+    # to 0.30 (9.6GB), well above the profiling peak with real headroom;
+    # "general" above was tuned down to 0.55 in tandem to keep the
+    # process-wide total (0.85) safely under 1.0. See docs/ROADMAP.md's
+    # 2026-09-05 model-upgrade section for the actual crash trace.
+    gpu_memory_utilization: 0.30
