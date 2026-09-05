@@ -475,3 +475,36 @@ rather than dismissed: that's expected, since it's a Prometheus Operator CRD, no
 Kubernetes type, and isn't in `kubeconform`'s default schema set. Re-ran pointed at the
 community CRD schema catalog and it validated clean (7/7) — confirming the earlier
 result really was a missing-schema-source gap, not an actual problem with the manifest.
+
+## Operational incident — submitting shell's environment hijacked the job (2026-09-05)
+
+`sbatch scripts/sbatch_serve.sh` failed with `ModuleNotFoundError: No module named 'vllm'`
+— misleading, since `vllm` was never missing. The job was submitted from a terminal where
+an unrelated project's virtualenv had been auto-activated on top of conda `base`. `sbatch`'s
+default behavior inherits the submitting shell's entire environment (`--export=ALL` is the
+default), so that venv's `PATH`/`VIRTUAL_ENV` state rode straight into the job — the
+script's own `conda activate servellm` line executed without error, but `python3` still
+resolved to a different conda env, with `uvicorn` imported from the other project's `.venv`
+instead. Confirmed by reading the actual traceback rather than guessing from the top-level
+error message: it named the wrong environment paths outright.
+
+Fixed in `scripts/sbatch_serve.sh` with three layers, each verified independently:
+1. `#SBATCH --export=NONE` — refuse to inherit the submitting shell's environment at all.
+2. Defensive `unset`/`conda deactivate` loop plus an explicit interpreter-path resolution
+   with a fail-fast `import vllm` check, so a similar issue fails loudly at the top of the
+   script instead of three files deep in an unrelated traceback.
+3. `srun --export=ALL` on the actual server-launching step — needed because this cluster's
+   `srun`, called from within a job submitted with `--export=NONE`, otherwise inherits that
+   same NONE policy instead of the batch script's own (by-then-clean) rebuilt environment,
+   so step 1 alone silently undid step 2's `export PYTHONNOUSERSITE=1` for the actual server
+   process. Caught by resubmitting after fix #1+#2 alone and finding a *different* stale
+   `~/.local` package (`triton`) still leaking in, not by reasoning it through in advance.
+
+### Verified (2026-09-05)
+
+Resubmitted after all three fixes: both models (`general`, `code`) loaded successfully end
+to end (`all models ready`, `Application startup complete`) under the corrected script. The
+only errors seen afterward (a port-bind conflict, then a CUDA OOM on a scheduler
+auto-requeue) were both artifacts of test-submitting a second instance while the original,
+already-healthy job was still holding the same GPU node — not defects in the fix — and
+resolved by cancelling the redundant test jobs, confirmed via `sacct`.
