@@ -1,0 +1,106 @@
+# Default values for the servellm chart. NOT verified against a live
+# Kubernetes cluster — this project's dev environment (a shared academic
+# HPC cluster) has no Docker daemon and no Kubernetes cluster to deploy to
+# (see docs/ROADMAP.md's Phase 14 section). What IS verified: `helm lint`
+# and `helm template` render this chart into schema-correct Kubernetes YAML.
+
+image:
+  # Build from docker/Dockerfile.backend (repo root as context) and push to
+  # a real registry before this chart can actually deploy anywhere — no
+  # image has been built or pushed from this dev environment (no Docker).
+  repository: servellm
+  tag: "0.14.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  # GPU scheduling needs the NVIDIA device plugin installed cluster-wide
+  # (https://github.com/NVIDIA/k8s-device-plugin) — not something a Helm
+  # chart can install for itself, it's a cluster-admin-level prerequisite.
+  limits:
+    nvidia.com/gpu: 1
+    memory: 16Gi
+    cpu: "8"
+  requests:
+    memory: 8Gi
+    cpu: "4"
+
+# Model cache (HF_HOME) as a PVC so weights survive pod restarts/rescheduling
+# without a full re-download. Assumes normal internet egress to huggingface.co
+# — unlike this project's actual dev cluster (see docs/ROADMAP.md), a
+# generic Kubernetes cluster isn't expected to be offline.
+modelCache:
+  enabled: true
+  size: 50Gi
+  storageClassName: ""  # cluster default if empty
+
+# Mirrors backend/router/models.yaml's schema (backend/router/registry.py's
+# ModelSpec) — this is the k8s-specific source of truth for which models to
+# serve, kept here rather than reading the bare-metal models.yaml from
+# outside the chart directory, which Helm's templating can't do cleanly.
+models:
+  - servedModelId: general
+    hfModel: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    capability: general
+    dtype: float16
+    maxModelLen: 2048
+    gpuMemoryUtilization: 0.35
+    schedulingPolicy: priority
+    maxDynamicAdapters: 3
+    adapters:
+      - name: colorist
+        hfRepo: BOT365/tinyllama-colorist-lora
+  - servedModelId: code
+    hfModel: Qwen/Qwen2.5-Coder-1.5B-Instruct
+    capability: code
+    dtype: float16
+    maxModelLen: 2048
+    gpuMemoryUtilization: 0.35
+
+# Maps directly to backend/core/config.py's Settings fields (SERVELLM_* env
+# vars). apiKeys/jwtSecret go in the Secret, not here — see secret.yaml /
+# --set-string or a separate values-secret.yaml kept out of version control.
+config:
+  databaseUrl: "sqlite:////data/servellm.db"
+  redisUrl: ""
+  adapterIdleTtlSeconds: 600
+  adapterSweepIntervalSeconds: 60
+  jwtAlgorithm: "HS256"
+  jwtExpirySeconds: 3600
+  rateLimitRequests: 60
+  rateLimitWindowSeconds: 60
+
+secrets:
+  # Empty by default (auth disabled, matching the non-k8s default — see
+  # backend/core/config.py). Set via --set-string secrets.apiKeys=... or a
+  # separate untracked values file, never committed here.
+  apiKeys: ""
+  jwtSecret: "servellm-dev-secret-change-me-before-any-real-use"
+
+autoscaling:
+  # CPU/memory only — GPU-aware autoscaling needs a custom metrics pipeline
+  # (e.g. Prometheus Adapter reading the servellm_gpu_* series from Phase 5)
+  # that isn't set up here. A reasonable default trigger for a serving
+  # workload dominated by GPU work would look very different from this; this
+  # is a starting point, not a tuned production policy.
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+serviceMonitor:
+  # Prometheus Operator CRD — only usable if the operator (and its CRDs)
+  # are actually installed in-cluster. `helm template` renders this
+  # unconditionally when enabled; it does not check for the CRD's existence
+  # (that's an `helm install`-time / cluster-state concern, not a templating one).
+  enabled: false
+  interval: 15s
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+*.db
+_slurm_runs/
+dashboard/.runtime/
+node_modules/
+dist/
+.pytest_cache/

@@ -1,0 +1,63 @@
+# Phase 2 model registry. Each entry gets its own vLLM AsyncLLMEngine on the
+# same GPU — gpu_memory_utilization values are kept low and sum to well
+# under 1.0 so both fit on a single V100 (32GB) alongside CUDA graph capture
+# overhead for each. Raise them (and pick bigger models — see the originally
+# planned Qwen3-8B/Gemma-3-4B lineup in README.md) once running on an A100
+# with more room, or once only one model needs to be resident at a time.
+#
+# dtype is float16, not auto/bfloat16: this cluster's working node
+# (dgx-v100-01) is compute capability 7.0, which vLLM's AsyncLLMEngine
+# hard-rejects for bfloat16 — see docs/ROADMAP.md.
+models:
+  - served_model_id: general
+    hf_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    capability: general
+    dtype: float16
+    max_model_len: 2048
+    gpu_memory_utilization: 0.35
+    # Phase 3: static LoRA adapter, addressed as "general:colorist" in
+    # request.model. Trained for exactly this base model (verified via its
+    # adapter_config.json base_model_name_or_path) — vLLM's canonical LoRA
+    # demo adapter, not something we trained ourselves.
+    adapters:
+      - name: colorist
+        hf_repo: BOT365/tinyllama-colorist-lora
+    # Phase 4: reserve vLLM LoRA slots for adapters registered at runtime via
+    # POST /v1/admin/adapters (e.g. general:tarot in docs/ROADMAP.md) — these
+    # aren't declared here, this just budgets room for them. Fixed at engine
+    # startup; raise it (and restart) if more than 3 dynamic adapters are
+    # ever resident on "general" at once.
+    max_dynamic_adapters: 3
+    # Phase 6: priority-ordered scheduling for the waiting queue (and
+    # preemption of running low-priority requests). "fcfs" (the vLLM
+    # default) accepts request.priority but never consults it — verified
+    # against vllm/core/scheduler.py. See scripts/bench_priority.py.
+    scheduling_policy: priority
+    # Phase 8: LEFT OFF. Crashes the whole server process (hard abort, not a
+    # Python exception) as soon as a second request tries to actually reuse
+    # a cached prefix — a Triton assertion inside vLLM's prefix-cache code
+    # path requires Ampere (cc >= 8.0); this cluster's working node
+    # (dgx-v100-01) is Volta (cc 7.0). Also tried enforce_eager: true (skips
+    # CUDA graph capture) as a possible workaround — identical crash, so the
+    # offending Triton kernel path isn't graph-capture-specific. See
+    # docs/ROADMAP.md for both crash traces.
+    enable_prefix_caching: false
+    enforce_eager: false
+    # max_num_seqs intentionally left unset here (vLLM default: 256) for
+    # normal use. The Phase 6 experiment in docs/ROADMAP.md temporarily set
+    # this to 3 to force real queueing contention with 24 concurrent
+    # requests — otherwise everything fits in the running batch immediately
+    # and priority has nothing to act on. Re-run scripts/bench_priority.py
+    # against a temporarily-constrained deployment to reproduce.
+    #
+    # Phase 7 experiment (docs/ROADMAP.md) temporarily set this to 1 to
+    # force true serialization as an honest "without batching" baseline on
+    # this exact engine/model/hardware, then reverted to unset (this line)
+    # to capture the continuous-batching side of the same comparison.
+
+  - served_model_id: code
+    hf_model: Qwen/Qwen2.5-Coder-1.5B-Instruct
+    capability: code
+    dtype: float16
+    max_model_len: 2048
+    gpu_memory_utilization: 0.35

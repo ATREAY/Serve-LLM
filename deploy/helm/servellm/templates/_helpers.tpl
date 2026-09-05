@@ -1,0 +1,19 @@
+{{- define "servellm.name" -}}
+{{- .Chart.Name -}}
+{{- end -}}
+
+{{- define "servellm.fullname" -}}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "servellm.labels" -}}
+app.kubernetes.io/name: {{ include "servellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
+{{- define "servellm.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "servellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}

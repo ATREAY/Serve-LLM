@@ -1,0 +1,15 @@
+apiVersion: 1
+
+providers:
+  - name: ServeLLM
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      # __DASHBOARD_DIR__ substituted by scripts/observability_start.sh at
+      # launch time (Grafana's file provisioning needs an absolute path,
+      # which isn't known until the repo is actually checked out somewhere).
+      path: __DASHBOARD_DIR__

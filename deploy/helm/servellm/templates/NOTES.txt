@@ -1,0 +1,21 @@
+ServeLLM ({{ .Chart.AppVersion }}) deployed as {{ include "servellm.fullname" . }}.
+
+Not verified against a live cluster from this project's dev environment (no
+Kubernetes cluster, no Docker daemon there) — see docs/ROADMAP.md's Phase 14
+section for what "verified" means here (helm lint / helm template) versus
+what doesn't (an actual `helm install`).
+
+Before this actually works anywhere:
+  1. Build and push the image: docker build -f docker/Dockerfile.backend -t <registry>/servellm:{{ .Chart.AppVersion }} .
+     (update .Values.image.repository/tag to match)
+  2. Install the NVIDIA device plugin cluster-wide if not already present:
+     https://github.com/NVIDIA/k8s-device-plugin
+  3. Set real secrets: --set-string secrets.apiKeys=... (or leave empty to
+     match this project's own default of auth disabled)
+
+Check rollout status:
+  kubectl rollout status deployment/{{ include "servellm.fullname" . }}
+
+Port-forward to try it locally:
+  kubectl port-forward svc/{{ include "servellm.fullname" . }} 8000:{{ .Values.service.port }}
+  curl http://localhost:8000/v1/models

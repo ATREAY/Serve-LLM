@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "servellm.fullname" . }}
+  labels:
+    {{- include "servellm.labels" . | nindent 4 }}
+spec:
+  # >1 replica means >1 independent copy of every model's weights loaded
+  # into >1 GPU's memory — this isn't a stateless web app that scales
+  # trivially. Fine for replicaCount: 1 (this chart's default); revisit
+  # before raising it (see values.yaml's autoscaling comment on the same point).
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "servellm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "servellm.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: servellm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: SERVELLM_HOST
+              value: "0.0.0.0"
+            - name: SERVELLM_PORT
+              value: "8000"
+            - name: SERVELLM_MODELS_CONFIG_PATH
+              value: "/etc/servellm/models.yaml"
+            - name: SERVELLM_DATABASE_URL
+              value: {{ .Values.config.databaseUrl | quote }}
+            {{- if .Values.config.redisUrl }}
+            - name: SERVELLM_REDIS_URL
+              value: {{ .Values.config.redisUrl | quote }}
+            {{- end }}
+            - name: SERVELLM_ADAPTER_IDLE_TTL_SECONDS
+              value: {{ .Values.config.adapterIdleTtlSeconds | quote }}
+            - name: SERVELLM_ADAPTER_SWEEP_INTERVAL_SECONDS
+              value: {{ .Values.config.adapterSweepIntervalSeconds | quote }}
+            - name: SERVELLM_JWT_ALGORITHM
+              value: {{ .Values.config.jwtAlgorithm | quote }}
+            - name: SERVELLM_JWT_EXPIRY_SECONDS
+              value: {{ .Values.config.jwtExpirySeconds | quote }}
+            - name: SERVELLM_RATE_LIMIT_REQUESTS
+              value: {{ .Values.config.rateLimitRequests | quote }}
+            - name: SERVELLM_RATE_LIMIT_WINDOW_SECONDS
+              value: {{ .Values.config.rateLimitWindowSeconds | quote }}
+            - name: HF_HOME
+              value: "/data/huggingface"
+            - name: SERVELLM_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "servellm.fullname" . }}-secrets
+                  key: SERVELLM_API_KEYS
+            - name: SERVELLM_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "servellm.fullname" . }}-secrets
+                  key: SERVELLM_JWT_SECRET
+          volumeMounts:
+            - name: models-config
+              mountPath: /etc/servellm
+              readOnly: true
+            {{- if .Values.modelCache.enabled }}
+            - name: model-cache
+              mountPath: /data
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            # Generous: cold-starting two models (weight load + CUDA graph
+            # capture) took 1-2 minutes in this project's own measurements
+            # (docs/ROADMAP.md) — a tight probe would flap the pod forever.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: models-config
+          configMap:
+            name: {{ include "servellm.fullname" . }}-models
+        {{- if .Values.modelCache.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ include "servellm.fullname" . }}-model-cache
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

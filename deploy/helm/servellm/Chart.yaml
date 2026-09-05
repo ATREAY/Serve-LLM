@@ -1,0 +1,10 @@
+apiVersion: v2
+name: servellm
+description: >-
+  Multi-tenant LLM serving on vLLM — multi-model routing, static/dynamic
+  LoRA adapters, GPU telemetry, priority scheduling, and security (API
+  keys/JWT/rate limiting). See ../../../docs/ROADMAP.md for what's real
+  vs. aspirational at each phase.
+type: application
+version: 0.14.0
+appVersion: "0.14.0"

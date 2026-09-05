@@ -1,0 +1,39 @@
+{{/* Renders values.yaml's .Values.models into exactly the YAML shape
+backend/router/registry.py's load_model_specs() expects from
+backend/router/models.yaml — field names translated from this chart's
+camelCase values convention to that file's snake_case. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "servellm.fullname" . }}-models
+  labels:
+    {{- include "servellm.labels" . | nindent 4 }}
+data:
+  models.yaml: |
+    models:
+    {{- range .Values.models }}
+      - served_model_id: {{ .servedModelId }}
+        hf_model: {{ .hfModel }}
+        capability: {{ .capability | default "general" }}
+        dtype: {{ .dtype | default "auto" }}
+        {{- if .maxModelLen }}
+        max_model_len: {{ .maxModelLen }}
+        {{- end }}
+        gpu_memory_utilization: {{ .gpuMemoryUtilization | default 0.4 }}
+        {{- if .schedulingPolicy }}
+        scheduling_policy: {{ .schedulingPolicy }}
+        {{- end }}
+        {{- if .maxNumSeqs }}
+        max_num_seqs: {{ .maxNumSeqs }}
+        {{- end }}
+        {{- if .maxDynamicAdapters }}
+        max_dynamic_adapters: {{ .maxDynamicAdapters }}
+        {{- end }}
+        {{- if .adapters }}
+        adapters:
+        {{- range .adapters }}
+          - name: {{ .name }}
+            hf_repo: {{ .hfRepo }}
+        {{- end }}
+        {{- end }}
+    {{- end }}

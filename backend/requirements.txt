@@ -1,0 +1,32 @@
+# Phase 1 — core serving. Install inside a GPU-node conda/venv (see
+# scripts/sbatch_serve.sh), not on the login node: vllm + torch pull in
+# several GB of CUDA wheels.
+#
+# torch/torchvision are pinned to a CUDA 12.1 build because `pip install
+# vllm` alone resolves to the latest vllm, which hard-pins torch==<latest>+cu13
+# — and every GPU node on this cluster has a driver too old for CUDA 13
+# (535.x on dgx-a100-02, 570.x on the P100/V100 nodes). vllm==0.6.3.post1
+# hard-pins torch==2.4.0, which has an official cu121 build all of them
+# accept. Verified end-to-end on dgx-v100-01 (see scripts/sbatch_serve.sh
+# for why v100, not a100 or p100, is the actual serving target here).
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.4.0+cu121
+torchvision==0.19.0+cu121
+vllm==0.6.3.post1
+# Pinned, not >=: transformers 5.x refuses to bind to torch<2.5 (falls back
+# to a tokenizer-only stub) and vllm 0.6.3.post1's tokenizer code hits a
+# removed attribute on it. 4.45.2 is the exact floor vllm 0.6.3.post1 was
+# built against.
+transformers==4.45.2
+fastapi>=0.111.0,<0.113.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.9.0
+pydantic-settings>=2.3.0
+prometheus-client>=0.20.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+redis>=5.0.0
+httpx>=0.27.0
+pyyaml>=6.0  # backend/router/registry.py parses models.yaml directly (Phase 2)
+nvidia-ml-py>=12.560  # backend/metrics/gpu.py queries NVML directly (Phase 5)
+pyjwt>=2.9.0  # backend/gateway/auth.py issues/verifies JWTs (Phase 13)
